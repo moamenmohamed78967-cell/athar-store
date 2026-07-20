@@ -555,14 +555,21 @@ select.status-select{background:var(--bg); border:1px solid var(--border); color
 
       <div class="admin-tabpanel active" id="tab-orders">
         <div class="admin-head" style="margin-bottom:24px">
-          <span></span>
+          <span id="live-indicator" style="font-size:12px;color:var(--fg-dim);display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#7fc998;display:inline-block"></span>تحديث تلقائي مفعّل</span>
           <button class="btn btn-outline" id="admin-refresh">تحديث</button>
         </div>
         <div class="admin-stats" id="admin-stats"></div>
+        <div class="admin-tabs" id="order-filter-tabs" style="border-bottom:none;flex-wrap:wrap">
+          <button class="admin-tab active" data-status="الكل">الكل</button>
+          <button class="admin-tab" data-status="جديد">جديد</button>
+          <button class="admin-tab" data-status="قيد التنفيذ">قيد التنفيذ (مقبول)</button>
+          <button class="admin-tab" data-status="تم الشحن">تم الشحن</button>
+          <button class="admin-tab" data-status="مكتمل">مكتمل (تم التسليم)</button>
+        </div>
         <div class="table-wrap">
           <table class="orders" id="orders-table">
             <thead>
-              <tr><th>رقم الطلب</th><th>العميل</th><th>المنتجات</th><th>الدفع</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th></tr>
+              <tr><th>رقم الطلب</th><th>العميل</th><th>العنوان</th><th>المنتجات</th><th>الدفع</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th><th>بوليصة</th></tr>
             </thead>
             <tbody id="orders-tbody"></tbody>
           </table>
@@ -1157,26 +1164,62 @@ async function showAdminPanel(){
   document.getElementById('admin-panel').style.display = 'block';
   if(productsWereSeeded){ await saveProducts(); productsWereSeeded = false; }
   if(settingsWereSeeded){ await saveSettings(); settingsWereSeeded = false; }
-  renderAdminOrders();
+  await renderAdminOrders();
+  initOrderFilterTabs();
+  subscribeOrdersRealtime();
 }
 
 /* ================= ADMIN: ORDERS TAB ================= */
+let ALL_ORDERS = [];
+let currentOrderFilter = 'الكل';
+let ordersRealtimeChannel = null;
+
+function subscribeOrdersRealtime(){
+  if(ordersRealtimeChannel) return; // already subscribed
+  ordersRealtimeChannel = sb.channel('orders-changes')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload)=>{
+      toast('📦 طلب جديد وصل!');
+      renderAdminOrders();
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, ()=>{
+      renderAdminOrders();
+    })
+    .subscribe();
+}
+
+function initOrderFilterTabs(){
+  document.querySelectorAll('#order-filter-tabs .admin-tab').forEach(tab=>{
+    tab.addEventListener('click', ()=>{
+      document.querySelectorAll('#order-filter-tabs .admin-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      currentOrderFilter = tab.dataset.status;
+      renderOrdersTable();
+    });
+  });
+}
+
 async function renderAdminOrders(){
-  const orders = await loadOrders();
+  ALL_ORDERS = await loadOrders();
   const statsEl = document.getElementById('admin-stats');
-  const total = orders.reduce((s,o)=>s+o.total,0);
-  const newCount = orders.filter(o=>o.status==='جديد').length;
+  const total = ALL_ORDERS.reduce((s,o)=>s+o.total,0);
+  const newCount = ALL_ORDERS.filter(o=>o.status==='جديد').length;
   statsEl.innerHTML = `
-    <div class="stat-card"><div class="num">${orders.length}</div><div class="lbl">إجمالي الطلبات</div></div>
+    <div class="stat-card"><div class="num">${ALL_ORDERS.length}</div><div class="lbl">إجمالي الطلبات</div></div>
     <div class="stat-card"><div class="num">${newCount}</div><div class="lbl">طلبات جديدة</div></div>
     <div class="stat-card"><div class="num">${fmt(total)}</div><div class="lbl">إجمالي المبيعات</div></div>
-    <div class="stat-card"><div class="num">${orders.length? Math.round(total/orders.length):0}</div><div class="lbl">متوسط الطلب (ج.م)</div></div>
+    <div class="stat-card"><div class="num">${ALL_ORDERS.length? Math.round(total/ALL_ORDERS.length):0}</div><div class="lbl">متوسط الطلب (ج.م)</div></div>
   `;
+  renderOrdersTable();
+}
+
+function renderOrdersTable(){
+  const orders = currentOrderFilter === 'الكل' ? ALL_ORDERS : ALL_ORDERS.filter(o=>o.status===currentOrderFilter);
   const tbody = document.getElementById('orders-tbody');
   const emptyEl = document.getElementById('admin-empty');
   if(orders.length===0){
     tbody.innerHTML = '';
     emptyEl.style.display = 'block';
+    emptyEl.textContent = ALL_ORDERS.length===0 ? 'لا توجد طلبات حتى الآن' : 'لا توجد طلبات في هذا التصنيف';
     return;
   }
   emptyEl.style.display = 'none';
@@ -1184,6 +1227,7 @@ async function renderAdminOrders(){
     <tr>
       <td><b>${o.id}</b></td>
       <td>${o.name}<br><span style="color:var(--fg-dim);font-size:12px">${o.phone}</span><br><span style="color:var(--fg-dim);font-size:12px">${o.gov}</span></td>
+      <td style="max-width:180px;font-size:12px">${o.address || '—'}${o.notes ? `<br><span style="color:var(--brass)">ملاحظة: ${o.notes}</span>` : ''}</td>
       <td>${o.items.map(i=>`${i.name} (${i.color}, ${i.size}) ×${i.qty}`).join('<br>')}</td>
       <td style="font-size:12px">${o.payment || '—'}</td>
       <td><b>${fmt(o.total)}</b></td>
@@ -1193,6 +1237,7 @@ async function renderAdminOrders(){
         </select>
       </td>
       <td style="color:var(--fg-dim);font-size:12px">${o.date}</td>
+      <td><button type="button" class="pm-btn add-color print-label-btn" data-order="${o.id}" style="font-size:11px;padding:6px 10px">طباعة</button></td>
     </tr>
   `).join('');
   tbody.querySelectorAll('.status-select').forEach(sel=>{
@@ -1202,6 +1247,48 @@ async function renderAdminOrders(){
       renderAdminOrders();
     });
   });
+  tbody.querySelectorAll('.print-label-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const order = ALL_ORDERS.find(o=>o.id===btn.dataset.order);
+      if(order) printShippingLabel(order);
+    });
+  });
+}
+
+function printShippingLabel(o){
+  const win = window.open('', '_blank', 'width=500,height=650');
+  const itemsRows = o.items.map(i=>`<tr><td>${i.name}</td><td>${i.color}</td><td>${i.size}</td><td>${i.qty}</td><td>${fmt(i.price*i.qty)}</td></tr>`).join('');
+  win.document.write(`
+    <html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>بوليصة شحن - ${o.id}</title>
+    <style>
+      body{font-family:Arial,sans-serif; padding:24px; color:#111;}
+      h1{font-size:22px; border-bottom:2px solid #111; padding-bottom:10px;}
+      .row{margin:10px 0; font-size:14px;}
+      .row b{display:inline-block; width:110px;}
+      table{width:100%; border-collapse:collapse; margin-top:16px; font-size:13px;}
+      th,td{border:1px solid #999; padding:6px 8px; text-align:right;}
+      .total{font-size:16px; font-weight:bold; margin-top:14px; text-align:left;}
+      .brand{font-size:26px; font-weight:bold; margin-bottom:4px;}
+    </style></head>
+    <body>
+      <div class="brand">أثر — Athar</div>
+      <h1>بوليصة شحن — ${o.id}</h1>
+      <div class="row"><b>العميل:</b> ${o.name}</div>
+      <div class="row"><b>الموبايل:</b> ${o.phone}</div>
+      <div class="row"><b>المحافظة:</b> ${o.gov}</div>
+      <div class="row"><b>العنوان:</b> ${o.address}</div>
+      ${o.notes ? `<div class="row"><b>ملاحظات:</b> ${o.notes}</div>` : ''}
+      <div class="row"><b>طريقة الدفع:</b> ${o.payment || '—'}</div>
+      <div class="row"><b>التاريخ:</b> ${o.date}</div>
+      <table>
+        <thead><tr><th>المنتج</th><th>اللون</th><th>المقاس</th><th>الكمية</th><th>السعر</th></tr></thead>
+        <tbody>${itemsRows}</tbody>
+      </table>
+      <div class="total">الإجمالي: ${fmt(o.total)}</div>
+      <script>window.onload = () => setTimeout(()=>window.print(), 300);<\/script>
+    </body></html>
+  `);
+  win.document.close();
 }
 
 /* ================= ADMIN: PRODUCTS TAB ================= */
