@@ -1102,6 +1102,29 @@ function renderPayMethodsCheckout(){
   });
 }
 
+/* ================= GOOGLE SHEETS SYNC ================= */
+const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbw0tOd-iEQsWDFxSNMY2dGMuJlspi9d1o8bspAmlf_CSXMHzh1cOM1VrD4wp9wSbeFs/exec';
+
+function syncOrderToSheet(order){
+  const itemsText = order.items.map(i=>`${i.name} (${i.color}, ${i.size}) x${i.qty}`).join(' | ');
+  fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({
+      id: order.id,
+      name: order.name,
+      phone: order.phone,
+      gov: order.gov,
+      address: order.address,
+      items: itemsText,
+      total: order.total,
+      payment: order.payment,
+      date: order.date
+    })
+  }).catch(err => console.error('Google Sheets sync failed', err));
+}
+
 async function submitOrder(e){
   e.preventDefault();
   if(CART.length===0){ toast('السلة فارغة'); return; }
@@ -1124,6 +1147,7 @@ async function submitOrder(e){
     toast('حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى');
     return;
   }
+  syncOrderToSheet(order);
   CART = [];
   saveCart();
   updateCartUI();
